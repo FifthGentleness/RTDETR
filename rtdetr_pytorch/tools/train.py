@@ -1,5 +1,7 @@
 """by lyuwenyu
 """
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
 import os 
 import sys 
@@ -9,7 +11,6 @@ import argparse
 import src.misc.dist as dist 
 from src.core import YAMLConfig 
 from src.solver import TASKS
-
 
 def main(args, ) -> None:
     '''main

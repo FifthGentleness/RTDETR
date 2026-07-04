@@ -24,7 +24,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     model.train()
     criterion.train()
     metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('lr_group0', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('lr_group1', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('lr_group2', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     # metric_logger.add_meter('class_error', SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = kwargs.get('print_freq', 10)
@@ -80,7 +82,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             sys.exit(1)
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        for i, pg in enumerate(optimizer.param_groups[:3]):
+            metric_logger.update(**{f'lr_group{i}': pg["lr"]})
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -173,11 +176,12 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors,
     
     stats = {}
     # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    _bbox_keys = ['AP', 'AP50', 'AP75', 'AP_S', 'AP_M', 'AP_L', 'AR1', 'AR10', 'AR100', 'AR_S', 'AR_M', 'AR_L']
     if coco_evaluator is not None:
         if 'bbox' in iou_types:
-            stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
+            stats['visdrone_eval_bbox'] = {k: v for k, v in zip(_bbox_keys, coco_evaluator.coco_eval['bbox'].stats.tolist())}
         if 'segm' in iou_types:
-            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+            stats['coco_eval_masks'] = {k: v for k, v in zip(_bbox_keys, coco_evaluator.coco_eval['segm'].stats.tolist())}
             
     # if panoptic_res is not None:
     #     stats['PQ_all'] = panoptic_res["All"]
@@ -185,6 +189,3 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors,
     #     stats['PQ_st'] = panoptic_res["Stuff"]
 
     return stats, coco_evaluator
-
-
-

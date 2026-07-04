@@ -94,7 +94,7 @@ class CocoEvaluator(object):
                 [
                     {
                         "image_id": original_id,
-                        "category_id": labels[k],
+                        "category_id": int(labels[k]) + 1,
                         "bbox": box,
                         "score": scores[k],
                     }
@@ -266,4 +266,3 @@ def evaluate(self):
 #################################################################
 # end of straight copy from pycocotools, just removing the prints
 #################################################################
-

@@ -14,6 +14,21 @@ from .solver import BaseSolver
 from .det_engine import train_one_epoch, evaluate
 
 
+def get_model_flops(model, input_size=(1, 3, 640, 640)):
+    try:
+        from thop import profile, clever_format
+        device = next(model.parameters()).device
+        dummy_input = torch.randn(*input_size).to(device)
+        model.eval()
+        flops, params = profile(model, inputs=(dummy_input,), verbose=False)
+        model.train()
+        flops_str, params_str = clever_format([flops, params], "%.2f")
+        return flops, flops_str
+    except ImportError:
+        print("Warning: thop not installed, FLOPs will not be calculated. Install with: pip install thop")
+        return None, None
+
+
 class DetSolver(BaseSolver):
     
     def fit(self, ):
@@ -24,6 +39,10 @@ class DetSolver(BaseSolver):
         
         n_parameters = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print('number of params:', n_parameters)
+
+        gflops, gflops_str = get_model_flops(self.model)
+        if gflops is not None:
+            print(f'GFLOPs: {gflops_str}')
 
         base_ds = get_coco_api_from_dataset(self.val_dataloader.dataset)
         # best_stat = {'coco_eval_bbox': 0, 'coco_eval_masks': 0, 'epoch': -1, }
@@ -41,33 +60,32 @@ class DetSolver(BaseSolver):
             self.lr_scheduler.step()
             
             if self.output_dir:
-                checkpoint_paths = [self.output_dir / 'checkpoint.pth']
-                # extra checkpoint before LR drop and every 100 epochs
-                if (epoch + 1) % args.checkpoint_step == 0:
-                    checkpoint_paths.append(self.output_dir / f'checkpoint{epoch:04}.pth')
-                for checkpoint_path in checkpoint_paths:
-                    dist.save_on_master(self.state_dict(epoch), checkpoint_path)
+                dist.save_on_master(self.state_dict(epoch), self.output_dir / 'latest.pth')
 
             module = self.ema.module if self.ema else self.model
             test_stats, coco_evaluator = evaluate(
                 module, self.criterion, self.postprocessor, self.val_dataloader, base_ds, self.device, self.output_dir
             )
 
-            # TODO 
             for k in test_stats.keys():
+                val = test_stats[k]['AP'] if isinstance(test_stats[k], dict) else test_stats[k][0]
                 if k in best_stat:
-                    best_stat['epoch'] = epoch if test_stats[k][0] > best_stat[k] else best_stat['epoch']
-                    best_stat[k] = max(best_stat[k], test_stats[k][0])
+                    if val > best_stat[k]:
+                        best_stat[k] = val
+                        best_stat['epoch'] = epoch
+                        if self.output_dir:
+                            dist.save_on_master(self.state_dict(epoch), self.output_dir / 'best.pth')
                 else:
+                    best_stat[k] = val
                     best_stat['epoch'] = epoch
-                    best_stat[k] = test_stats[k][0]
             print('best_stat: ', best_stat)
 
 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                         **{f'test_{k}': v for k, v in test_stats.items()},
                         'epoch': epoch,
-                        'n_parameters': n_parameters}
+                        'n_parameters': n_parameters,
+                        'gflops': gflops}
 
             if self.output_dir and dist.is_main_process():
                 with (self.output_dir / "log.txt").open("a") as f:

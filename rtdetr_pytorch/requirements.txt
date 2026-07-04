@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
+
 torch==2.0.1
 torchvision==0.15.2
 onnx==1.14.0
@@ -6,3 +8,4 @@ pycocotools
 PyYAML
 scipy
 transformers
+thop

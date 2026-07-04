@@ -27,6 +27,10 @@ class CocoDetection(torchvision.datasets.CocoDetection):
     
     def __init__(self, img_folder, ann_file, transforms, return_masks, remap_mscoco_category=False):
         super(CocoDetection, self).__init__(img_folder, ann_file)
+        for img_id in self.coco.imgs:
+            fname = self.coco.imgs[img_id]['file_name']
+            if not fname.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
+                self.coco.imgs[img_id]['file_name'] = fname + '.jpg'
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks, remap_mscoco_category)
         self.img_folder = img_folder
@@ -106,7 +110,7 @@ class ConvertCocoPolysToMask(object):
         if self.remap_mscoco_category:
             classes = [mscoco_category2label[obj["category_id"]] for obj in anno]
         else:
-            classes = [obj["category_id"] for obj in anno]
+            classes = [obj["category_id"] - 1 for obj in anno]
             
         classes = torch.tensor(classes, dtype=torch.int64)
 
