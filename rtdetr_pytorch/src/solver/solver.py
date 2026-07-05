@@ -102,14 +102,18 @@ class BaseSolver(object):
             print('Loading last_epoch')
 
         if getattr(self, 'model', None) and 'model' in state:
+            model_state = {k: v for k, v in state['model'].items()
+                           if not k.endswith(('total_ops', 'total_params'))}
             if dist.is_parallel(self.model):
-                self.model.module.load_state_dict(state['model'])
+                self.model.module.load_state_dict(model_state)
             else:
-                self.model.load_state_dict(state['model'])
+                self.model.load_state_dict(model_state)
             print('Loading model.state_dict')
 
         if getattr(self, 'ema', None) and 'ema' in state:
-            self.ema.load_state_dict(state['ema'])
+            ema_state = {k: v for k, v in state['ema'].items()
+                         if not k.endswith(('total_ops', 'total_params'))}
+            self.ema.load_state_dict(ema_state)
             print('Loading ema.state_dict')
 
         if getattr(self, 'optimizer', None) and 'optimizer' in state:
