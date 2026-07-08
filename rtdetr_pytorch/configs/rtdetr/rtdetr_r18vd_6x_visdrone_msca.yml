@@ -42,7 +42,7 @@ val_dataloader:
 
 lr_scheduler:
   type: MultiStepLR
-  milestones: [160]
+  milestones: [999]
   gamma: 0.1
 
 optimizer:
