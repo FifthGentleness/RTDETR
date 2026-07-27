@@ -3,6 +3,9 @@ from .presnet import *
 from .presnet_msca import *
 from .presnet_csfh import *
 from .presnet_percepconv import *
+from .presnet_dsadcc import *
+from .presnet_dsadcc_v2 import *
+from .presnet_dsadcc_v3 import *
 from .test_resnet import *
 from .regnet import *
 from .common import *
