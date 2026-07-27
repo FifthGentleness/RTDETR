@@ -30,65 +30,66 @@ class MEE(nn.Module):
     def __init__(self, dim, scales=(2, 4, 6, 8)):
         super().__init__()
         self.scales = scales
-        half = dim // 2
+        # After expand(dim→2*dim) + split, each chunk has dim channels
+        ch = dim
 
         # Channel expand + split
         self.expand = nn.Conv2d(dim, dim * 2, 1, bias=False)
 
         # Bypass branch
-        self.bypass_conv = ConvNormLayer(half, half, 3, 1, act='relu')
+        self.bypass_conv = ConvNormLayer(ch, ch, 3, 1, act='relu')
 
         # Enhancement branch: shared 1x1 reduction for all scales
-        self.reduce = nn.Conv2d(half, half, 1, bias=False)
+        self.reduce = nn.Conv2d(ch, ch, 1, bias=False)
 
         # Per-scale DWConv + edge gate
         self.dwconvs = nn.ModuleList([
-            nn.Conv2d(half, half, 3, padding=1, groups=half, bias=False)
+            nn.Conv2d(ch, ch, 3, padding=1, groups=ch, bias=False)
             for _ in scales
         ])
         self.edge_gates = nn.ModuleList([
-            nn.Conv2d(half, half, 1, bias=False)
+            nn.Conv2d(ch, ch, 1, bias=False)
             for _ in scales
         ])
 
-        # Fusion
-        self.fuse = nn.Conv2d(half * (1 + len(scales)), dim, 1, bias=False)
+        # Fusion: Concat(bypass, 4 scales) → dim
+        self.fuse = nn.Conv2d(ch * (1 + len(scales)), dim, 1, bias=False)
 
     def forward(self, x):
         B, C, H, W = x.shape
 
         # Expand + split
-        expanded = self.expand(x)  # [B, 2C, H, W]
-        x1, x2 = expanded.chunk(2, dim=1)  # each [B, C/2, H, W]
+        expanded = self.expand(x)  # [B, 2*Cr, H, W]
+        x1, x2 = expanded.chunk(2, dim=1)  # each [B, Cr, H, W]
 
         # Bypass branch
-        local = self.bypass_conv(x1)  # [B, C/2, H, W]
+        local = self.bypass_conv(x1)  # [B, Cr, H, W]
 
         # Enhancement branch
-        x2_reduced = self.reduce(x2)  # [B, C/2, H, W]
+        x2_reduced = self.reduce(x2)  # [B, Cr, H, W]
         enhanced_list = []
 
         for i, s in enumerate(self.scales):
             # Pool to scale s
-            pooled = F.adaptive_avg_pool2d(x2_reduced, (s, s))  # [B, C/2, s, s]
+            pooled = F.adaptive_avg_pool2d(x2_reduced, (s, s))  # [B, Cr, s, s]
 
             # DWConv
-            t = self.dwconvs[i](pooled)  # [B, C/2, s, s]
+            t = self.dwconvs[i](pooled)  # [B, Cr, s, s]
 
             # High-frequency edge extraction
             edge = t - F.avg_pool2d(t, kernel_size=3, stride=1, padding=1)
 
             # Gated edge enhancement + residual
             gate = torch.sigmoid(self.edge_gates[i](edge))
-            enhanced = t + gate * edge  # [B, C/2, s, s]
+            enhanced = t + gate * edge  # [B, Cr, s, s]
 
             # Upsample back to HxW
             enhanced_up = F.interpolate(enhanced, size=(H, W), mode='bilinear', align_corners=False)
             enhanced_list.append(enhanced_up)
 
         # Fuse
-        fused = torch.cat([local] + enhanced_list, dim=1)  # [B, C/2*(1+len(scales)), H, W]
-        out = self.fuse(fused)  # [B, C, H, W]
+        fused = torch.cat([local] + enhanced_list, dim=1)  # [B, Cr*(1+len(scales)), H, W]
+        out = self.fuse(fused)  # [B, Cr, H, W]
 
         return out
 
