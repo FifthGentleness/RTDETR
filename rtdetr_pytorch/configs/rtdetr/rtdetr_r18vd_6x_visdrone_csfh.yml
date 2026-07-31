@@ -8,6 +8,8 @@ __include__: [
 
 output_dir: ./output/rtdetr_r18vd_6x_visdrone_csfh
 
+seed: 42
+
 RTDETR:
   backbone: CSFHNet
 

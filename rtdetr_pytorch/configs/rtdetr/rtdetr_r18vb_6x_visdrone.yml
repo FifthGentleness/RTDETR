@@ -8,6 +8,8 @@ __include__: [
 
 output_dir: ./output/rtdetr_r18vb_6x_visdrone
 
+seed: 42
+
 PResNet:
   depth: 18
   variant: b

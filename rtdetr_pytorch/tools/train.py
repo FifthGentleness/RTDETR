@@ -10,14 +10,21 @@ import argparse
 
 import src.misc.dist as dist 
 from src.core import YAMLConfig 
+from src.core.yaml_utils import load_config
 from src.solver import TASKS
 
 def main(args, ) -> None:
     '''main
     '''
     dist.init_distributed()
-    if args.seed is not None:
-        dist.set_seed(args.seed)
+
+    # seed priority: CLI arg > YAML config > None
+    seed = args.seed
+    if seed is None:
+        cfg_pre = load_config(args.config)
+        seed = cfg_pre.get('seed', None)
+    if seed is not None:
+        dist.set_seed(seed)
 
     assert not all([args.tuning, args.resume]), \
         'Only support from_scrach or resume or tuning at one time'

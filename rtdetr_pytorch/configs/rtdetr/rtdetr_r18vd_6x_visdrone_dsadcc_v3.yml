@@ -8,6 +8,8 @@ __include__: [
 
 output_dir: ./output/rtdetr_r18vd_6x_visdrone_dsadcc_v3
 
+seed: 42
+
 RTDETR:
   backbone: PResNet_DSADCC_v3
 
