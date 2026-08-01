@@ -180,8 +180,13 @@ def sync_time():
 
 
 
+_SEED = None
+
+
 def set_seed(seed):
     # fix the seed for reproducibility
+    global _SEED
+    _SEED = seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -190,3 +195,9 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def seed_worker(worker_id):
+    worker_seed = (_SEED + worker_id) if _SEED is not None else 0
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)

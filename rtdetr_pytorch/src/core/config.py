@@ -11,6 +11,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 
 from typing import Callable, List, Dict
 
+from src.misc.dist import seed_worker
 
 __all__ = ['BaseConfig', ]
 
@@ -128,7 +129,8 @@ class BaseConfig(object):
                                 batch_size=self.train_batch_size, 
                                 num_workers=self.num_workers, 
                                 collate_fn=self.collate_fn,
-                                shuffle=self.train_shuffle, )
+                                shuffle=self.train_shuffle,
+                                worker_init_fn=seed_worker)
             loader.shuffle = self.train_shuffle
             self._train_dataloader = loader
 
@@ -146,7 +148,8 @@ class BaseConfig(object):
                                 num_workers=self.num_workers, 
                                 drop_last=False,
                                 collate_fn=self.collate_fn, 
-                                shuffle=self.val_shuffle)
+                                shuffle=self.val_shuffle,
+                                worker_init_fn=seed_worker)
             loader.shuffle = self.val_shuffle
             self._val_dataloader = loader
 
@@ -258,7 +261,4 @@ class BaseConfig(object):
 
 
     # def __repr__(self) -> str:
-    #     pass 
-
-
-
+    #     pass
