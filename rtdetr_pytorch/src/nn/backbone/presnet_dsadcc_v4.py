@@ -96,25 +96,17 @@ class DSADCC_v4(nn.Module):
     1. DSA: 5-way spatial weights (4 DWConv + Scharr edge detection).
     2. DCC: Wavelet-domain calibration with IDWT + FiLM.
        - DWT decomposes Xs into LL/LH/HL/HH subbands.
-       - LL (low-freq): modulated by global channel descriptor (GAP/GMP/DWT-LL fusion).
-       - LH/HL/HH (high-freq): modulated by spatial feature from high-freq subbands.
+       - LL (low-freq): modulated by global channel descriptor + spatial feature.
+       - LH/HL/HH (high-freq): modulated by direction-specific spatial features + global descriptor.
        - IDWT reconstructs full-resolution calibration map from modulated subbands.
-       - FiLM (1+tanh(γ), tanh(β)) generates bounded affine calibration.
+       - FiLM with learnable scale (init=0) ensures identity at start, gradual calibration.
 
-    Flow:
-    1. Shared channel reduction: C -> Cr via 1x1 Conv -> Xs
-    2. DSA (parallel): 4 DWConv + Scharr -> spatial weights [B,5,H,W]
-       -> weighted sum -> channel_mix -> Fdsa [B, Cr, H, W]
-    3. DCC:
-       a. GAP/GMP/DWT-LL -> scalar fusion -> global_feat [B, Cr, 1, 1]
-       b. DWT high-freq subbands -> spatial_mix -> spatial_feat [B, Cr, H/2, W/2]
-       c. Wavelet-domain calibration:
-          cal_ll = Conv1x1(LL) + global_feat
-          cal_lh/hl/hh = Conv1x1(LH/HL/HH) + spatial_feat
-       d. IDWT(cal_ll, cal_lh, cal_hl, cal_hh) -> cal_map [B, Cr, H, W]
-       e. FiLM: gamma = 1+tanh, beta = tanh -> fdcc = Xs * gamma + beta
-    4. Cross-interaction: GAP(Fdsa) + GAP(fdcc) -> cross_gate [B, 2Cr, 1, 1]
-    5. Fusion: Concat(Fdsa, fdcc) * cross_gate -> Conv1x1+BN+SiLU -> out [B, C, H, W]
+    Critical fixes over initial v4:
+    - FiLM uses learnable scale initialized to 0 for stable residual learning.
+    - IDWT output normalized via LayerNorm before FiLM generation.
+    - High-freq subbands use direction-specific spatial features.
+    - Global channel descriptor influences ALL subbands (not just LL).
+    - Scharr output centered to avoid positive bias.
     """
 
     def __init__(self, dim, reduction=4):
@@ -149,8 +141,16 @@ class DSADCC_v4(nn.Module):
         self.dwt = HaarDWT()
         self.idwt = HaarIDWT()
 
-        # --- DCC: High-freq spatial feature mixing ---
-        self.spatial_mix = nn.Sequential(
+        # --- DCC: High-freq direction-specific spatial features ---
+        self.spatial_mix_lh = nn.Sequential(
+            nn.Conv2d(cr * 3, cr, 1, bias=False),
+            nn.ReLU(inplace=True),
+        )
+        self.spatial_mix_hl = nn.Sequential(
+            nn.Conv2d(cr * 3, cr, 1, bias=False),
+            nn.ReLU(inplace=True),
+        )
+        self.spatial_mix_hh = nn.Sequential(
             nn.Conv2d(cr * 3, cr, 1, bias=False),
             nn.ReLU(inplace=True),
         )
@@ -164,8 +164,12 @@ class DSADCC_v4(nn.Module):
         self.cal_hl = nn.Conv2d(cr, cr, 1, bias=False)
         self.cal_hh = nn.Conv2d(cr, cr, 1, bias=False)
 
-        # --- DCC: FiLM parameter generation ---
+        # --- DCC: Normalization for IDWT output ---
+        self.cal_norm = nn.GroupNorm(num_groups=1, num_channels=cr, eps=1e-5)
+
+        # --- DCC: FiLM parameter generation with learnable scale ---
         self.film_gen = nn.Conv2d(cr, cr * 2, 1, bias=True)
+        self.film_scale = nn.Parameter(torch.zeros(1))
 
         # --- Lightweight cross-interaction at fusion ---
         self.cross_gate = nn.Sequential(
@@ -184,7 +188,8 @@ class DSADCC_v4(nn.Module):
         f2 = self.dwconv5(xs)
         f3 = self.dwconv7(xs)
         f4 = self.dwconv_d4(xs)
-        f_scharr = self.scharr(xs)  # [B, Cr, H, W]
+        f_scharr = self.scharr(xs)
+        f_scharr = f_scharr - f_scharr.mean(dim=[2, 3], keepdim=True)  # center to avoid positive bias
 
         spatial_cat = torch.cat([f1, f2, f3, f4, f_scharr], dim=1)  # [B, 5*Cr, H, W]
         spatial_weights = F.softmax(self.weight_conv(spatial_cat), dim=1)  # [B, 5, H, W]
@@ -212,24 +217,31 @@ class DSADCC_v4(nn.Module):
         gamma = weights[:, 2:3]  # [B, 1, 1, 1]
         global_feat = alpha * favg + beta * fmax + gamma * dwt_ll  # [B, Cr, 1, 1]
 
-        # Spatial feature from high-freq subbands
+        # Direction-specific spatial features from high-freq subbands
         high_cat = torch.cat([lh, hl, hh], dim=1)  # [B, 3*Cr, H/2, W/2]
-        spatial_feat = self.spatial_mix(high_cat)    # [B, Cr, H/2, W/2]
+        spatial_lh = self.spatial_mix_lh(high_cat)  # [B, Cr, H/2, W/2]
+        spatial_hl = self.spatial_mix_hl(high_cat)  # [B, Cr, H/2, W/2]
+        spatial_hh = self.spatial_mix_hh(high_cat)  # [B, Cr, H/2, W/2]
 
-        # Wavelet-domain calibration
-        cal_ll = self.cal_ll(ll) + global_feat   # [B, Cr, H/2, W/2] + [B, Cr, 1, 1]
-        cal_lh = self.cal_lh(lh) + spatial_feat  # [B, Cr, H/2, W/2]
-        cal_hl = self.cal_hl(hl) + spatial_feat  # [B, Cr, H/2, W/2]
-        cal_hh = self.cal_hh(hh) + spatial_feat  # [B, Cr, H/2, W/2]
+        # Wavelet-domain calibration (global_feat influences ALL subbands)
+        cal_ll = self.cal_ll(ll) + global_feat + spatial_lh * 0.1  # [B, Cr, H/2, W/2]
+        cal_lh = self.cal_lh(lh) + global_feat + spatial_lh        # [B, Cr, H/2, W/2]
+        cal_hl = self.cal_hl(hl) + global_feat + spatial_hl        # [B, Cr, H/2, W/2]
+        cal_hh = self.cal_hh(hh) + global_feat + spatial_hh        # [B, Cr, H/2, W/2]
 
         # IDWT reconstruction -> full-resolution calibration map
         cal_map = self.idwt(cal_ll, cal_lh, cal_hl, cal_hh)  # [B, Cr, H, W]
 
-        # FiLM: bounded affine calibration
+        # Normalize calibration map for stable FiLM generation
+        cal_map = self.cal_norm(cal_map)  # [B, Cr, H, W]
+
+        # FiLM: residual-style with learnable scale (init=0 → identity at start)
         film_params = self.film_gen(cal_map)  # [B, 2*Cr, H, W]
         gamma_raw, beta_raw = film_params.chunk(2, dim=1)  # each [B, Cr, H, W]
-        film_gamma = 1.0 + torch.tanh(gamma_raw)  # (0, 2), residual scaling
-        film_beta = torch.tanh(beta_raw)           # (-1, 1), bounded shift
+
+        scale = self.film_scale  # init=0, gradually learned
+        film_gamma = 1.0 + scale * torch.tanh(gamma_raw)  # init: 1+0=1 (identity)
+        film_beta = scale * torch.tanh(beta_raw)           # init: 0 (no shift)
 
         fdcc = xs * film_gamma + film_beta  # [B, Cr, H, W]
 
