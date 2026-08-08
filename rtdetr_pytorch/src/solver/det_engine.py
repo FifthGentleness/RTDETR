@@ -11,6 +11,7 @@ import sys
 import pathlib
 from typing import Iterable
 
+import numpy as np
 import torch
 import torch.amp 
 
@@ -123,18 +124,13 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors,
 
         outputs = model(samples)
 
-        # loss_dict = criterion(outputs, targets)
-        # weight_dict = criterion.weight_dict
-        # # reduce losses over all GPUs for logging purposes
-        # loss_dict_reduced = reduce_dict(loss_dict)
-        # loss_dict_reduced_scaled = {k: v * weight_dict[k]
-        #                             for k, v in loss_dict_reduced.items() if k in weight_dict}
-        # loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-        #                               for k, v in loss_dict_reduced.items()}
-        # metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
-        #                      **loss_dict_reduced_scaled,
-        #                      **loss_dict_reduced_unscaled)
-        # metric_logger.update(class_error=loss_dict_reduced['class_error'])
+        loss_dict = criterion(outputs, targets)
+        weight_dict = criterion.weight_dict
+        loss_dict_reduced = reduce_dict(loss_dict)
+        loss_dict_reduced_scaled = {k: v * weight_dict[k]
+                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
+        metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
+                             **loss_dict_reduced_scaled)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
         results = postprocessors(outputs, orig_target_sizes)
@@ -175,11 +171,25 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors,
     #     panoptic_res = panoptic_evaluator.summarize()
     
     stats = {}
-    # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    val_loss_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    if val_loss_stats:
+        stats['val_loss'] = val_loss_stats
+
     _bbox_keys = ['AP', 'AP50', 'AP75', 'AP_S', 'AP_M', 'AP_L', 'AR1', 'AR10', 'AR100', 'AR_S', 'AR_M', 'AR_L']
     if coco_evaluator is not None:
         if 'bbox' in iou_types:
-            stats['visdrone_eval_bbox'] = {k: v for k, v in zip(_bbox_keys, coco_evaluator.coco_eval['bbox'].stats.tolist())}
+            coco_eval_bbox = coco_evaluator.coco_eval['bbox']
+            stats['visdrone_eval_bbox'] = {k: v for k, v in zip(_bbox_keys, coco_eval_bbox.stats.tolist())}
+
+            _pr_keys = ['Precision', 'Recall']
+            pr_stats = {}
+            if coco_eval_bbox.eval is not None:
+                eval_res = coco_eval_bbox.eval['precision']
+                recall_res = coco_eval_bbox.eval['recall']
+                pr_stats['Precision'] = float(np.mean(eval_res[0, :, :, 0, 2]))
+                pr_stats['Recall'] = float(np.mean(recall_res[:, :, 0, 2]))
+            stats['visdrone_eval_pr'] = pr_stats
+
         if 'segm' in iou_types:
             stats['coco_eval_masks'] = {k: v for k, v in zip(_bbox_keys, coco_evaluator.coco_eval['segm'].stats.tolist())}
             
