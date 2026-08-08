@@ -68,7 +68,9 @@ class DetSolver(BaseSolver):
             )
 
             for k in test_stats.keys():
-                val = test_stats[k]['AP'] if isinstance(test_stats[k], dict) else test_stats[k][0]
+                if not (isinstance(test_stats[k], dict) and 'AP' in test_stats[k]):
+                    continue
+                val = test_stats[k]['AP']
                 if k in best_stat:
                     if val > best_stat[k]:
                         best_stat[k] = val
