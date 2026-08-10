@@ -125,12 +125,9 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors,
         outputs = model(samples)
 
         loss_dict = criterion(outputs, targets)
-        weight_dict = criterion.weight_dict
         loss_dict_reduced = reduce_dict(loss_dict)
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
-                             **loss_dict_reduced_scaled)
+        loss_value = sum(loss_dict_reduced.values())
+        metric_logger.update(loss=loss_value, **loss_dict_reduced)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
         results = postprocessors(outputs, orig_target_sizes)
