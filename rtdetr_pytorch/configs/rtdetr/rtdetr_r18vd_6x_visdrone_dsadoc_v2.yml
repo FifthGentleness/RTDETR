@@ -6,15 +6,21 @@ __include__: [
   './include/rtdetr_r50vd.yml',
 ]
 
-output_dir: ./output/rtdetr_r18vd_6x_visdrone
+output_dir: ./output/rtdetr_r18vd_6x_visdrone_dsadoc_v2
 
 seed: 42
 
-PResNet:
+RTDETR:
+  backbone: PResNet_DSADOC_v2
+
+PResNet_DSADOC_v2:
   depth: 18
+  variant: d
+  return_idx: [1, 2, 3]
   freeze_at: -1
   freeze_norm: False
   pretrained: False
+  reduction: 4
 
 HybridEncoder:
   in_channels: [128, 256, 512]
@@ -44,15 +50,15 @@ lr_scheduler:
 
 optimizer:
   type: AdamW
-  params: 
-    - 
+  params:
+    -
       params: '^(?=.*backbone)(?=.*norm).*$'
       lr: 0.00001
       weight_decay: 0.
-    - 
+    -
       params: '^(?=.*backbone)(?!.*norm).*$'
       lr: 0.00001
-    - 
+    -
       params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bias)).*$'
       weight_decay: 0.
 

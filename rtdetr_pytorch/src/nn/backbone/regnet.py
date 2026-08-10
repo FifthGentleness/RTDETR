@@ -9,9 +9,14 @@ __all__ = ['RegNet']
 
 @register
 class RegNet(nn.Module):
-    def __init__(self, configuration, return_idx=[0, 1, 2, 3]):
-        super(RegNet, self).__init__()  
-        self.model = RegNetModel.from_pretrained("facebook/regnet-y-040")
+    def __init__(self, configuration, return_idx=[0, 1, 2, 3], pretrained=True):
+        super(RegNet, self).__init__()
+        if pretrained:
+            self.model = RegNetModel.from_pretrained("facebook/regnet-y-040")
+            print(f'Load RegNet state_dict from HuggingFace (facebook/regnet-y-040)')
+        else:
+            self.model = RegNetModel.from_config(RegNetConfig())
+            print(f'RegNet initialized randomly (pretrained=False)')
         self.return_idx = return_idx
 
 

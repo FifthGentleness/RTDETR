@@ -293,7 +293,8 @@ class CSFHNet(nn.Module):
                  return_idx=[1, 2, 3],
                  freeze_at=-1,
                  freeze_norm=False,
-                 act='silu'):
+                 act='silu',
+                 pretrained=False):
         super().__init__()
 
         self.return_idx = return_idx
@@ -327,6 +328,9 @@ class CSFHNet(nn.Module):
 
         if freeze_norm:
             self._freeze_norm(self)
+
+        if pretrained:
+            print(f'Warning: CSFHNet does not support pretrained weights, pretrained={pretrained} ignored')
 
     def forward(self, x):
         x = self.stem(x)

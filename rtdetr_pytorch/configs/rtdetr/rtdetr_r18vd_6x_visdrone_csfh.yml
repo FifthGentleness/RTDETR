@@ -21,6 +21,7 @@ CSFHNet:
   freeze_at: -1
   freeze_norm: False
   act: silu
+  pretrained: True
 
 HybridEncoder:
   in_channels: [256, 384, 384]

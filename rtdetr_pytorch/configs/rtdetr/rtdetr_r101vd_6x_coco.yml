@@ -8,6 +8,7 @@ __include__: [
 
 PResNet:
   depth: 101
+  pretrained: True
 
 
 HybridEncoder:
