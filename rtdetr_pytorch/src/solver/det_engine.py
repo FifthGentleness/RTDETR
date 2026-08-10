@@ -178,13 +178,27 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors,
             coco_eval_bbox = coco_evaluator.coco_eval['bbox']
             stats['visdrone_eval_bbox'] = {k: v for k, v in zip(_bbox_keys, coco_eval_bbox.stats.tolist())}
 
-            _pr_keys = ['Precision', 'Recall']
             pr_stats = {}
             if coco_eval_bbox.eval is not None:
-                eval_res = coco_eval_bbox.eval['precision']
-                recall_res = coco_eval_bbox.eval['recall']
-                pr_stats['Precision'] = float(np.mean(eval_res[0, :, :, 0, 2]))
-                pr_stats['Recall'] = float(np.mean(recall_res[:, :, 0, 2]))
+                precision = coco_eval_bbox.eval['precision']
+                rec_thrs = coco_eval_bbox.params.recThrs
+                pr_curve = precision[0, :, :, 0, 2]
+                num_classes = pr_curve.shape[1]
+                p_curve = pr_curve
+                r_curve = np.tile(rec_thrs[:, None], (1, num_classes))
+                f1_curve = 2 * p_curve * r_curve / (p_curve + r_curve + 1e-16)
+                valid_mask = p_curve >= 0
+                f1_curve = np.where(valid_mask, f1_curve, 0)
+                mean_f1 = f1_curve.mean(axis=1)
+                best_idx = int(np.argmax(mean_f1))
+                per_class_p = p_curve[best_idx, :]
+                per_class_r = r_curve[best_idx, :]
+                per_class_f1 = f1_curve[best_idx, :]
+                valid_classes = valid_mask[best_idx, :]
+                if np.any(valid_classes):
+                    pr_stats['Precision'] = float(per_class_p[valid_classes].mean())
+                    pr_stats['Recall'] = float(per_class_r[valid_classes].mean())
+                    pr_stats['F1'] = float(per_class_f1[valid_classes].mean())
             stats['visdrone_eval_pr'] = pr_stats
 
         if 'segm' in iou_types:
