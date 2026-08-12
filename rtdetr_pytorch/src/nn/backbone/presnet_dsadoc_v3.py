@@ -237,7 +237,11 @@ class DSADOC_v3(nn.Module):
         cal_hh = self.cal_hh(hh) + global_feat + spatial_hh  # [B, Cr, H/2, W/2]
 
         # IDWT reconstruction -> full-resolution calibration map
-        cal_map = self.idwt(cal_ll, cal_lh, cal_hl, cal_hh)  # [B, Cr, H, W]
+        cal_map = self.idwt(cal_ll, cal_lh, cal_hl, cal_hh)  # [B, Cr, H', W']
+
+        # Crop to match original spatial size (IDWT may produce H+1/W+1 when input was odd)
+        if cal_map.shape[2] != xs.shape[2] or cal_map.shape[3] != xs.shape[3]:
+            cal_map = cal_map[:, :, :xs.shape[2], :xs.shape[3]]
 
         # Normalize calibration map for stable FiLM generation
         cal_map = self.cal_norm(cal_map)  # [B, Cr, H, W]
