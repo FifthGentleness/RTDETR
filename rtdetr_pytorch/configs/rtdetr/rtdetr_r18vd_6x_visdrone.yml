@@ -14,7 +14,7 @@ PResNet:
   depth: 18
   freeze_at: -1
   freeze_norm: False
-  pretrained: False
+  pretrained: True
 
 HybridEncoder:
   in_channels: [128, 256, 512]
