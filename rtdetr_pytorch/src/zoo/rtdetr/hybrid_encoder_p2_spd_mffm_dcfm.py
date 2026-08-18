@@ -105,7 +105,7 @@ class PDCBlock(nn.Module):
             self.shortcut = nn.Conv2d(inplane, ouplane, kernel_size=1, padding=0)
 
         self.conv1 = nn.Sequential(
-            PDCConv(pdc_type, inplane, inplane, kernel_size=3, padding=1, groups=inplane, pdc_type=pdc_type),
+            PDCConv(inplane, inplane, kernel_size=3, padding=1, groups=inplane, pdc_type=pdc_type),
             nn.BatchNorm2d(inplane),
         )
         self.relu2 = nn.ReLU()
