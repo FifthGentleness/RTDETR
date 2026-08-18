@@ -6,21 +6,21 @@ __include__: [
   './include/rtdetr_r50vd.yml',
 ]
 
-output_dir: ./output/rtdetr_r18vd_6x_visdrone_dsadoc_v5
+output_dir: ./output/rtdetr_r18vd_6x_visdrone_dsadoc_v7
 
 seed: 42
 
 RTDETR:
-  backbone: PResNet_DSADOC_v2
+  backbone: PResNet_DSADOC_v4
 
-PResNet_DSADOC_v2:
+PResNet_DSADOC_v4:
   depth: 18
   variant: d
   return_idx: [1, 2, 3]
   freeze_at: -1
   freeze_norm: False
   pretrained: True
-  reduction: 1
+  reduction: 2
 
 HybridEncoder:
   in_channels: [128, 256, 512]
@@ -32,7 +32,7 @@ RTDETRTransformer:
   num_decoder_layers: 3
   num_denoising: 100
 
-epoches: 400
+epoches: 350
 clip_max_norm: 0.1
 
 train_dataloader:
