@@ -32,7 +32,7 @@ RTDETRTransformer:
   num_decoder_layers: 3
   num_denoising: 100
 
-epoches: 350
+epoches: 400
 clip_max_norm: 0.1
 
 train_dataloader:
