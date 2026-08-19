@@ -12,6 +12,7 @@ from .presnet_dsadoc_v2 import *
 from .presnet_dsadoc_v3 import *
 from .presnet_dsadoc_v4 import *
 from .presnet_dsadoc_v8 import *
+from .presnet_dsadoc_v9 import *
 from .presnet_dsamee import *
 from .test_resnet import *
 from .regnet import *
