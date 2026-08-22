@@ -1,0 +1,84 @@
+__include__: [
+  '../dataset/visdrone_detection.yml',
+  '../runtime.yml',
+  './include/dataloader.yml',
+  './include/optimizer.yml',
+  './include/rtdetr_r50vd.yml',
+]
+
+output_dir: ./output/rtdetr_r18vd_6x_visdrone_p2_spd_okm
+
+seed: 42
+
+RTDETR:
+  backbone: PResNet
+  encoder: HybridEncoderP2SPDOKM
+
+PResNet:
+  depth: 18
+  variant: d
+  return_idx: [0, 1, 2, 3]
+  freeze_at: -1
+  freeze_norm: False
+  pretrained: True
+
+HybridEncoderP2SPDOKM:
+  in_channels: [64, 128, 256, 512]
+  feat_strides: [4, 8, 16, 32]
+  hidden_dim: 256
+  use_encoder_idx: [3]
+  num_encoder_layers: 1
+  nhead: 8
+  dim_feedforward: 1024
+  dropout: 0.
+  enc_act: 'gelu'
+  pe_temperature: 10000
+  expansion: 0.5
+  depth_mult: 1
+  act: 'silu'
+  eval_spatial_size: [640, 640]
+  gmm_h: 80
+  gmm_w: 80
+
+RTDETRTransformer:
+  feat_channels: [256, 256, 256]
+  feat_strides: [8, 16, 32]
+  num_levels: 3
+  eval_idx: -1
+  num_decoder_layers: 3
+  num_denoising: 100
+  eval_spatial_size: [640, 640]
+
+epoches: 350
+clip_max_norm: 0.1
+
+train_dataloader:
+  batch_size: 4
+  num_workers: 4
+
+val_dataloader:
+  batch_size: 4
+  num_workers: 4
+
+lr_scheduler:
+  type: MultiStepLR
+  milestones: [999]
+  gamma: 0.1
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?=.*norm).*$'
+      lr: 0.00001
+      weight_decay: 0.
+    -
+      params: '^(?=.*backbone)(?!.*norm).*$'
+      lr: 0.00001
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bias)).*$'
+      weight_decay: 0.
+
+  lr: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001
