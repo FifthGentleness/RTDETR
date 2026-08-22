@@ -2,24 +2,18 @@
 # 文件说明：
 # - 该文件的作用：实现RT-DETR的改进混合编码器v2，融合MGDFIS的GMM和PiDiViT的DCFM，
 #   以及OKNet的OKNetLargeKernel和FDAM的FreqScale，构建三路并行CCFF融合块
-#   v2与v1的区别：
-#   - v1: concat[3C] → Conv1x1(3C→C) → CCFFBlock(C) → f3
-#   - v2: concat[3C] → CCFFBlock(3C) → CSPRepLayer(3C→C) → f3
-#   即v2不先降维，直接将concat的3C通道送入创新模块做全维度增强，
-#   再用原版RT-DETR的CSPRepLayer融合块降维到hidden_dim
-#   CCFF融合流程：
-#   concat[3C] → 三路分岔(Small+DCFM / Large+OKNetLargeKernel / Global(GMM∥FreqScale)) → Add → Residual
-#   → CSPRepLayer(3C→C)
-#   - DCFM(Difference-Calibrated Fusion Module): 来自PiDiViT，通过中心差分卷积提取边缘/纹理特征
-#   - OKNetLargeKernel: 来自OKNet，全向大核分解卷积(dw_1×K + dw_K×1 + dw_K×K + dw_1×1)
-#   - GMM(Global Mixing Module): 来自MGDFIS，通过水平/垂直方向的重排卷积实现全局空间混合
-#   - FreqScale(Frequency Scale): 来自FDAM的GroupDynamicScale，分组动态频谱调制
-#   三路分岔设计：
-#   - Small分支: 原始特征 + DCFM差分增强 → Concat → Conv1x1(2C→C)
+#   v2借鉴LE-DETR的EFAM 1:3划分逻辑：
+#   - concat[3C=512] → cv1: Conv1x1(512→512) 通道重混
+#   - → split[128, 384] (1:3划分)
+#   - → 128ch走创新模块(三路分岔) + 384ch直接透传(identity)
+#   - → concat[128, 384]=512 → cv2: Conv1x1(512→512) 融合
+#   - → CSPRepLayer(512→256) 标准CSP卷积块降维
+#   创新模块三路分岔设计(split_channels=128)：
+#   - Small分支: 原始特征 + DCFM差分增强 → Concat → Conv1x1(256→128)
 #   - Large分支: OKNetLargeKernel全向大核空间特征(dw_1×K + dw_K×1 + dw_K×K + dw_1×1)
 #   - Global分支: 左分支GMM(空间全局混合) ∥ 右分支FreqScale(分组动态频谱调制)
 #                → 自适应融合 α_c·F_space + β_c·F_freq → Conv1x1+BN+Act
-#   三路Element-wise Add + 1x1 Conv + Residual Add → CSPRepLayer(3C→C)
+#   三路Element-wise Add → concat[创新输出, identity] → cv2融合 → Residual Add → CSPRepLayer(3C→C)
 # =========================================
 '''by lyuwenyu
 '''
@@ -296,42 +290,65 @@ class FreqScale(nn.Module):
 
 class CCFFBlock(nn.Module):
     def __init__(self, channels, gmm_h, gmm_w, large_kernel=31, dropout=0.1,
-                 fs_group=16, fs_num_filters=4, fs_base_size=14):
+                 fs_group=16, fs_num_filters=4, fs_base_size=14,
+                 split_ratio=1.0):
         super().__init__()
-        self.dcfm = DCFM(channels)
-        self.small_fuse = ConvNormLayer(channels * 2, channels, 1, 1, act='silu')
+        self.split_ratio = split_ratio
+        self.split_channels = int(channels * split_ratio)
+        self.remaining_channels = channels - self.split_channels
+        sc = self.split_channels
 
-        self.large_kernel_conv = OKNetLargeKernel(channels, large_kernel=large_kernel)
+        if self.split_ratio < 1.0:
+            self.pre_mix = ConvNormLayer(channels, channels, 1, 1, act='silu')
 
-        self.gmm = GMM(channels, gmm_h, gmm_w)
-        self.freq_scale = FreqScale(channels, group=fs_group, num_filters=fs_num_filters,
+        self.dcfm = DCFM(sc)
+        self.small_fuse = ConvNormLayer(sc * 2, sc, 1, 1, act='silu')
+
+        self.large_kernel_conv = OKNetLargeKernel(sc, large_kernel=large_kernel)
+
+        fs_group_sc = max(1, fs_group * sc // channels)
+        self.gmm = GMM(sc, gmm_h, gmm_w)
+        self.freq_scale = FreqScale(sc, group=fs_group_sc, num_filters=fs_num_filters,
                                     base_size=fs_base_size)
-        self.alpha = nn.Parameter(torch.full((channels, 1, 1), 0.5))
-        self.beta = nn.Parameter(torch.full((channels, 1, 1), 0.5))
-        self.global_out = ConvNormLayer(channels, channels, 1, 1, act='silu')
+        self.alpha = nn.Parameter(torch.full((sc, 1, 1), 0.5))
+        self.beta = nn.Parameter(torch.full((sc, 1, 1), 0.5))
+        self.global_out = ConvNormLayer(sc, sc, 1, 1, act='silu')
 
-        self.out_conv = ConvNormLayer(channels, channels, 1, 1, act='silu')
+        if self.split_ratio < 1.0:
+            self.post_mix = ConvNormLayer(channels, channels, 1, 1, act='silu')
 
     def forward(self, x):
-        identity = x
+        if self.split_ratio < 1.0:
+            mixed = self.pre_mix(x)
+            x_in, x_short = torch.split(
+                mixed,
+                [self.split_channels, self.remaining_channels],
+                dim=1
+            )
+        else:
+            x_in = x
+            x_short = None
 
-        small_orig = x
-        small_dcfm = self.dcfm(x)
+        small_orig = x_in
+        small_dcfm = self.dcfm(x_in)
         small_cat = torch.cat([small_orig, small_dcfm], dim=1)
         small_out = self.small_fuse(small_cat)
 
-        large_out = self.large_kernel_conv(x)
+        large_out = self.large_kernel_conv(x_in)
 
-        f_space = self.gmm(x)
-        f_freq = self.freq_scale(x)
+        f_space = self.gmm(x_in)
+        f_freq = self.freq_scale(x_in)
         global_fused = self.alpha * f_space + self.beta * f_freq
         global_out = self.global_out(global_fused)
 
         out = small_out + large_out + global_out
 
-        out = self.out_conv(out)
-
-        out = out + identity
+        if self.split_ratio < 1.0:
+            out = torch.cat([out, x_short], dim=1)
+            out = self.post_mix(out)
+            out = out + x
+        else:
+            out = out + x_in
 
         return out
 
@@ -358,7 +375,8 @@ class HybridEncoderP2SPDOKMFSV2(nn.Module):
                  large_kernel=31,
                  fs_group=16,
                  fs_num_filters=4,
-                 fs_base_size=14):
+                 fs_base_size=14,
+                 split_ratio=1.0):
         super().__init__()
         self.in_channels = in_channels
         self.feat_strides = feat_strides
@@ -403,12 +421,14 @@ class HybridEncoderP2SPDOKMFSV2(nn.Module):
         )
         self.lateral_convs.append(ConvNormLayer(hidden_dim, hidden_dim, 1, 1, act=act))
 
-        # CCFF v2: concat[3C] → CCFFBlock(3C) → CSPRepLayer(3C→C)
+        # CCFF v2: concat[3C] → CCFFBlock(3C, split) → CSPRepLayer(3C→C)
+        # LE-DETR style: concat[512] → cv1(512→512) → split[128,384] → 创新(128)+identity(384) → concat → cv2(512→512) → CSP(512→256)
         self.ccff_spd_conv = SPDConv(in_channels[0], in_channels[1], act=act)
         ccff_concat_ch = in_channels[1] * 2 + hidden_dim
         self.ccff_block = CCFFBlock(ccff_concat_ch, gmm_h, gmm_w, large_kernel=large_kernel,
                                     dropout=dropout, fs_group=fs_group,
-                                    fs_num_filters=fs_num_filters, fs_base_size=fs_base_size)
+                                    fs_num_filters=fs_num_filters, fs_base_size=fs_base_size,
+                                    split_ratio=split_ratio)
         self.ccff_fuse_block = CSPRepLayer(ccff_concat_ch, hidden_dim, round(3 * depth_mult),
                                            act=act, expansion=expansion)
 

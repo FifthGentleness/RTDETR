@@ -37,12 +37,13 @@ HybridEncoderP2SPDOKMFSV2:
   depth_mult: 1
   act: 'silu'
   eval_spatial_size: [640, 640]
-  gmm_h: 80
-  gmm_w: 80
+  gmm_h: 40
+  gmm_w: 40
   large_kernel: 31
   fs_group: 16
   fs_num_filters: 4
   fs_base_size: 14
+  split_ratio: 0.25
 
 RTDETRTransformer:
   feat_channels: [256, 256, 256]
