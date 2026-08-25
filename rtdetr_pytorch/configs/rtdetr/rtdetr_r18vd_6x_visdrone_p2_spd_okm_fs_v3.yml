@@ -6,13 +6,13 @@ __include__: [
   './include/rtdetr_r50vd.yml',
 ]
 
-output_dir: ./output/rtdetr_r18vd_6x_visdrone_p2_spd_okm
+output_dir: ./output/rtdetr_r18vd_6x_visdrone_p2_spd_okm_fs_v3
 
 seed: 42
 
 RTDETR:
   backbone: PResNet
-  encoder: HybridEncoderP2SPDOKM
+  encoder: HybridEncoderP2SPDOKMFSV3
 
 PResNet:
   depth: 18
@@ -22,7 +22,7 @@ PResNet:
   freeze_norm: False
   pretrained: True
 
-HybridEncoderP2SPDOKM:
+HybridEncoderP2SPDOKMFSV3:
   in_channels: [64, 128, 256, 512]
   feat_strides: [4, 8, 16, 32]
   hidden_dim: 256
@@ -37,7 +37,17 @@ HybridEncoderP2SPDOKM:
   depth_mult: 1
   act: 'silu'
   eval_spatial_size: [640, 640]
+  gmm_h: 80
+  gmm_w: 80
   large_kernel: 31
+  fs_group: 16
+  fs_num_filters: 4
+  fs_base_size: 14
+  split_ratio: 0.25
+  gmm_patch: 4
+  dcfm_theta: 0.875
+  fs_reweight_ratio: 0.25
+  fs_init_scale: 1e-5
 
 RTDETRTransformer:
   feat_channels: [256, 256, 256]
