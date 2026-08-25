@@ -47,7 +47,7 @@ HybridEncoderP2SPDOKMFSV3:
   gmm_patch: 4
   dcfm_theta: 0.875
   fs_reweight_ratio: 0.25
-  fs_init_scale: 1e-5
+  fs_init_scale: 0.00001
 
 RTDETRTransformer:
   feat_channels: [256, 256, 256]
