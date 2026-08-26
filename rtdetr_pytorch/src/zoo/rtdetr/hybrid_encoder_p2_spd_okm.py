@@ -1,13 +1,10 @@
 # =========================================
 # 文件说明：
 # - 该文件的作用：实现RT-DETR的改进混合编码器，严格对齐OKNet原始源码的BottleNect结构
-#   CCFF融合块即为OKNet的BottleNect，包含：
-#   - FCA(Frequency Channel Attention): 频域通道注意力
-#   - SCA(Spatial Channel Attention): 空间通道注意力
-#   - FGM(Frequency Gating Module): 频域门控模块
-#   - OmniKernel: 全向大核分解卷积(dw_1×K + dw_K×1 + dw_K×K + dw_1×1)
-#   数据流: concat[3C] → Conv1x1(3C→C) → BottleNect → 输出C
-#   BottleNect内部:
+#   CCFF融合块采用LE-DETR EFAM风格通道划分:
+#   Concat[SPDConv(P2)=128, Upsample(Y4)=256, P3=128] = 512ch (不降维)
+#   cv1(512→512) → split[128, 384] → BottleNect(128)+identity(384) → cat[512] → cv2(512→512) → CSPRep(512→256)
+#   BottleNect内部(OKNet原版):
 #   x → in_conv(Conv1x1+GELU) → out
 #   FCA: out → fft2 → fac_conv(pool(out))*fft → ifft2 → |·| → x_fca
 #   SCA: x_fca → conv(pool(x_fca))*x_fca → x_sca
@@ -126,7 +123,8 @@ class HybridEncoderP2SPDOKM(nn.Module):
                  depth_mult=1.0,
                  act='silu',
                  eval_spatial_size=None,
-                 large_kernel=31):
+                 large_kernel=31,
+                 split_ratio=0.25):
         super().__init__()
         self.in_channels = in_channels
         self.feat_strides = feat_strides
@@ -141,7 +139,7 @@ class HybridEncoderP2SPDOKM(nn.Module):
 
         self.input_proj = nn.ModuleList()
         for i, in_channel in enumerate(in_channels):
-            if i in [0, 1]:
+            if i in [0, 1, 2]:
                 self.input_proj.append(nn.Identity())
             else:
                 self.input_proj.append(
@@ -171,10 +169,19 @@ class HybridEncoderP2SPDOKM(nn.Module):
         )
         self.lateral_convs.append(ConvNormLayer(hidden_dim, hidden_dim, 1, 1, act=act))
 
+        # CCFF: LE-DETR EFAM style
+        # Concat[SPDConv(P2)=128, Upsample(Y4)=256, P3=128] = 512ch (不降维)
+        # cv1(512→512) → split[128, 384] → BottleNect(128)+identity(384) → cat[512] → cv2(512→512) → CSPRep(512→256)
         self.ccff_spd_conv = SPDConv(in_channels[0], in_channels[1], act=act)
         ccff_concat_ch = in_channels[1] * 2 + hidden_dim
-        self.ccff_channel_reduce = ConvNormLayer(ccff_concat_ch, hidden_dim, 1, 1, act=act)
-        self.ccff_block = BottleNect(hidden_dim, large_kernel=large_kernel)
+        self.split_channels = int(ccff_concat_ch * split_ratio)
+        self.remaining_channels = ccff_concat_ch - self.split_channels
+
+        self.ccff_cv1 = ConvNormLayer(ccff_concat_ch, ccff_concat_ch, 1, 1, act=act)
+        self.ccff_innovation = BottleNect(self.split_channels, large_kernel=large_kernel)
+        self.ccff_cv2 = ConvNormLayer(ccff_concat_ch, ccff_concat_ch, 1, 1, act=act)
+        self.ccff_fuse_block = CSPRepLayer(ccff_concat_ch, hidden_dim,
+                                           round(3 * depth_mult), act=act, expansion=expansion)
 
         self.downsample_convs = nn.ModuleList()
         self.pan_blocks = nn.ModuleList()
@@ -237,11 +244,17 @@ class HybridEncoderP2SPDOKM(nn.Module):
         p4_inner = self.fpn_blocks[0](torch.concat([upsample_feat, proj_feats[-2]], dim=1))
         y4 = self.lateral_convs[1](p4_inner)
 
+        # CCFF: LE-DETR EFAM style
         p2_spd = self.ccff_spd_conv(proj_feats[0])
         y4_up = F.interpolate(y4, scale_factor=2., mode='nearest')
         ccff_input = torch.concat([p2_spd, y4_up, proj_feats[1]], dim=1)
-        f3 = self.ccff_channel_reduce(ccff_input)
-        f3 = self.ccff_block(f3)
+
+        mixed = self.ccff_cv1(ccff_input)
+        ok_branch, identity = torch.split(mixed, [self.split_channels, self.remaining_channels], dim=1)
+        innovation_out = self.ccff_innovation(ok_branch)
+        fused = torch.cat([innovation_out, identity], dim=1)
+        fused = self.ccff_cv2(fused)
+        f3 = self.ccff_fuse_block(fused)
 
         outs = [f3]
         downsample_feat = self.downsample_convs[0](f3)

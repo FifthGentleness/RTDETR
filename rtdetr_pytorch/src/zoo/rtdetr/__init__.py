@@ -12,6 +12,7 @@ from .hybrid_encoder_p2_spd_okm_fs import *
 from .hybrid_encoder_p2_spd_okm_fs_v2 import *
 from .hybrid_encoder_p2_spd_okm_fs_v3 import *
 from .hybrid_encoder_p2_spd_okm_fs_v4 import *
+from .hybrid_encoder_p2_spd_okm_fs_v5 import *
 from .rtdetr_decoder import *
 from .rtdetr_postprocessor import *
 from .rtdetr_criterion import *
