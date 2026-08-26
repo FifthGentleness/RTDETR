@@ -68,23 +68,19 @@ class ScharrEdge(nn.Module):
 
 
 class DSADOC_v10(nn.Module):
-    """DSADOC_v10: Half-channel split design based on DSADOC_v2 (v5 config).
+    """DSADOC_v10: Half-channel split design, replaces branch2a (3rd conv).
 
-    Key difference from v5 (DSADOC_v2):
+    Design:
     - Input channels are split into two halves along channel dim:
       * First half  -> DSADOC innovative block (multi-scale spatial + wavelet calibration)
-      * Second half -> Original ResNet 3x3 conv for local feature extraction
-    - The two paths are complementary: DSADOC captures global/multi-scale/edge info,
-      while the 3x3 conv preserves local spatial patterns.
-    - After concat, a 1x1 Conv+BN+SiLU fusion layer mixes the two heterogeneous
-      feature streams before sending to the next stage.
+      * Second half -> Conv3x3 for local feature extraction
+    - After concat, output is sent directly to branch2b which naturally fuses
+      the two heterogeneous feature streams (no extra final_fusion needed).
     - No reduction parameter: half-channel split already provides natural compression,
-      so cr = dim//2 is fixed (equivalent to v5 with reduction=2 on half input).
+      so cr = dim//2 is fixed.
 
-    This design:
-    1. Reduces DSADOC computation by half (only processes dim//2 channels)
-    2. Preserves original ResNet feature extraction capability on the other half
-    3. Fusion layer enables learned channel-wise interaction between two paths
+    Placement: replaces branch2a (the 3rd 3x3 conv in each stage).
+    Information flow: x -> DSADOC -> branch2b -> (+shortcut) -> ReLU
     """
 
     def __init__(self, dim):
@@ -164,14 +160,8 @@ class DSADOC_v10(nn.Module):
         # --- DSADOC internal fusion: Concat -> Conv1x1+BN+SiLU ---
         self.dsadoc_fusion = ConvNormLayer(cr * 2, half_dim, 1, 1, act='silu')
 
-        # --- Conv path: original ResNet 3x3 conv for the other half ---
-        self.conv_path = nn.Sequential(
-            nn.Conv2d(half_dim, half_dim, 3, padding=1, bias=False),
-            nn.BatchNorm2d(half_dim),
-        )
-
-        # --- Final fusion: concat [dsadoc_out, conv_out] -> Conv1x1+BN+SiLU ---
-        self.final_fusion = ConvNormLayer(dim, dim, 1, 1, act='silu')
+        # --- Conv path: aligned with branch2a (ConvNormLayer: Conv+BN+ReLU) ---
+        self.conv_path = ConvNormLayer(half_dim, half_dim, 3, 1, act='relu')
 
     def forward(self, x):
         # Split input into two halves along channel dim
@@ -255,9 +245,8 @@ class DSADOC_v10(nn.Module):
         # === Conv path (second half): original ResNet 3x3 conv ===
         conv_out = self.conv_path(x_conv)  # [B, dim//2, H, W]
 
-        # === Final fusion: concat + 1x1 conv to mix two paths ===
+        # === Concat two paths, branch2b will fuse channels ===
         out = torch.cat([dsadoc_out, conv_out], dim=1)  # [B, dim, H, W]
-        out = self.final_fusion(out)  # [B, dim, H, W]
 
         return out
 
@@ -267,12 +256,12 @@ class DSADOCv10BasicBlock(BasicBlock):
 
     def __init__(self, ch_in, ch_out, stride, shortcut, act='relu', variant='b'):
         super().__init__(ch_in, ch_out, stride, shortcut, act, variant)
+        del self.branch2a
         self.dsadcc = DSADOC_v10(ch_out)
 
     def forward(self, x):
-        out = self.branch2a(x)
+        out = self.dsadcc(x)
         out = self.branch2b(out)
-        out = self.dsadcc(out)
         if self.shortcut:
             short = x
         else:
@@ -330,6 +319,12 @@ class PResNet_DSADOC_v10(PResNet):
             )
 
             old_state = old_block.state_dict()
-            new_block.load_state_dict(old_state, strict=False)
+            new_state = {}
+            new_block_state = new_block.state_dict()
+            for k, v in old_state.items():
+                if k in new_block_state:
+                    new_state[k] = v
+            new_block_state.update(new_state)
+            new_block.load_state_dict(new_block_state)
 
             blocks[last_idx] = new_block
